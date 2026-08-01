@@ -1,0 +1,5 @@
+test-fixtures/
+.env
+.env.*
+logs*.md
+models/
