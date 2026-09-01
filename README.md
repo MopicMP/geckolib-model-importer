@@ -21,6 +21,31 @@ does that conversion, and everything around it.
 - **Animations** are carried over, both rotation and position channels.
 - **Coplanar faces** are separated through the `Inflate` field, so the model does
   not flicker (z-fighting) while coordinates stay clean.
+- **Customizable Player Models** are a second target: the same import, saved as a
+  `.cpmproject`.
+
+## Customizable Player Models
+
+File → *Customizable Player Models from ZIP (glTF + texture)* runs the same
+import and then asks the three things a player skin needs and a GeckoLib model
+does not: the height in player pixels, which bone belongs to which part of the
+player, and what each animation becomes — a vanilla pose (`walking`, `sneaking`,
+`sleeping`…) or a gesture. Then it saves a `.cpmproject`.
+
+The size is a separate question and not the one the import ran at: CPM measures
+in player pixels, 32 of them head to toe, while a downloaded model arrives in
+whatever units its author used, so one number cannot serve both formats.
+
+The bone mapping is offered rather than decided. A guess by name is filled in,
+and on a model already rigged like a player it needs no corrections; on anything
+else a silent guess would be worse than none.
+
+A Blockbench project is created alongside the export — the UV convention is
+measured on it, and it lets the result be looked at. The report states the
+encoded size against CPM's 30 kB budget for a local model, so an export too
+heavy to keep off the CPM servers says so before it is saved.
+
+Details and checks: [`docs/cpm-plan.md`](docs/cpm-plan.md).
 
 ## What it cannot do
 
@@ -69,12 +94,14 @@ node tools/verify-gltf.mjs        model/model.obj    # glTF parsing against a ba
 node tools/verify-snap.mjs                           # grid snapping and its cost
 node tools/verify-coplanar.mjs                       # coplanar face separation
 node tools/verify-images.mjs                         # PNG/JPEG/GIF/WebP headers
+node tools/verify-cpm.mjs                            # .cpmproject: structure, limits, geometry
 node tools/smoke-plugin.mjs                          # the whole import path
 ```
 
 `smoke-plugin` substitutes Blockbench objects (`Cube`, `Group`, `Animation`,
 `THREE`, `JSZip`…) and runs the entire import twice: once with a PNG archive, once
-with a JPEG archive that also contains an unreadable image. It catches what
+with a JPEG archive that also contains an unreadable image. The CPM export runs
+after them, down the same path but saving a `.cpmproject`. It catches what
 `node --check` misses — reading a `const` before its declaration, typos in names,
 calls to functions that do not exist.
 

@@ -238,6 +238,8 @@ function fakeDialogRoot(html) {
 }
 
 const sandboxActions = [];
+let zipWritten = null;
+let exported = null;
 
 const sandbox = {
 	console, JSON, Math, Object, Array, String, Number, Boolean, Error, isFinite, parseInt, parseFloat,
@@ -289,9 +291,18 @@ const sandbox = {
 		addCSS: () => ({ delete() { } }),
 		on() { }, removeListener() { },
 		import(opts, cb) { cb([{ name: 'model(gltf).zip', content: null }]); },
+		export(opts) { exported = opts; },
 	},
-	JSZip: {
-		loadAsync() {
+	// Класс, а не объект: экспорт в CPM собирает архив через `new JSZip()`,
+	// а импорт распаковывает через статический loadAsync.
+	JSZip: class {
+		constructor() { this.files = {}; }
+		file(name, data) { this.files[name] = data; }
+		generateAsync() {
+			zipWritten = this.files;
+			return Promise.resolve(new ArrayBuffer(8));
+		}
+		static loadAsync() {
 			// настоящую распаковку не проверяем — подкладываем файлы с диска
 			return Promise.resolve({
 				forEach(cb) {
@@ -300,7 +311,7 @@ const sandbox = {
 					}
 				},
 			});
-		},
+		}
 	},
 	document: {
 		querySelector: () => null,
@@ -452,6 +463,76 @@ if (!reportShown || reportShown.indexOf('Images skipped: 1') < 0) {
     console.log('❌ в отчёте нет строки о пропущенной картинке (Images skipped)');
 } else {
     console.log('Нечитаемая картинка отмечена в отчёте, номера картинок пересчитаны: OK');
+}
+
+// --- экспорт в CPM: тот же путь, но с сохранением .cpmproject в конце.
+// Ловит то же, что и остальной дымовой тест: обращения к несуществующим полям,
+// опечатки в именах, забытые заглушки Blockbench. Правильность геометрии
+// проверяется отдельно — tools/verify-cpm.mjs.
+scenario = 'png';
+zipWritten = null;
+exported = null;
+console.log('');
+console.log('--- экспорт в CPM');
+const cpmAction = sandboxActions.find(a => a.id.endsWith('_cpm'));
+if (!cpmAction) {
+	failed = true;
+	console.log('❌ действие экспорта в CPM не найдено');
+} else {
+	try {
+		cpmAction.click();
+		await new Promise(r => setTimeout(r, 500));
+	} catch (e) {
+		failed = true;
+		console.log('ОШИБКА при экспорте в CPM: ' + e.message);
+		console.log(String(e.stack).split(String.fromCharCode(10)).slice(1, 4).join(' | '));
+	}
+	if (!zipWritten) {
+		failed = true;
+		console.log('❌ архив .cpmproject не собран');
+	} else if (!zipWritten['config.json']) {
+		failed = true;
+		console.log('❌ в архиве нет config.json');
+	} else {
+		const cfg = JSON.parse(zipWritten['config.json']);
+		const roots = cfg.elements.map(e => e.id).join(', ');
+		let boxes = 0;
+		const count = l => (l || []).forEach(e => {
+			if (e.size && (e.size.x || e.size.y || e.size.z)) boxes++;
+			count(e.children);
+		});
+		cfg.elements.forEach(r => count(r.children));
+		const animNames = Object.keys(zipWritten).filter(n => n.startsWith('animations/'));
+		console.log(`Корни: ${roots}`);
+		console.log(`Файлы в архиве: ${Object.keys(zipWritten).filter(n => !n.startsWith('animations/')).join(', ')}`
+			+ ` + анимаций ${animNames.length}`);
+		console.log(`Элементов с геометрией: ${boxes}, UV-сетка ${cfg.skinSize.x}×${cfg.skinSize.y}`);
+		if (!boxes) { failed = true; console.log('❌ в проекте CPM ни одного ящика'); }
+		if (!animNames.length) {
+			failed = true;
+			console.log('❌ ни одной анимации не перенесено');
+		} else {
+			// Имя файла — не украшение: по его префиксу загрузчик решает, поза это
+			// или жест, а по остатку — какая именно поза.
+			const bad = animNames.filter(n => !/^animations\/[vcg]_[^/]+\.json$/.test(n));
+			if (bad.length) { failed = true; console.log('❌ имена анимаций не по формату: ' + bad.slice(0, 3).join(', ')); }
+			const one = JSON.parse(zipWritten[animNames[0]]);
+			const comps = one.frames.reduce((s, f) => s + f.components.length, 0);
+			console.log(`Первая анимация: ${animNames[0].replace('animations/', '')}, `
+				+ `${one.frames.length} кадров, ${comps} записей, duration ${one.duration}`);
+			const ids = new Set();
+			const collect = l => (l || []).forEach(e => { ids.add(e.storeID); collect(e.children); });
+			cfg.elements.forEach(r => collect(r.children));
+			const orphan = one.frames.some(f => f.components.some(c => !ids.has(c.storeID)));
+			if (orphan) { failed = true; console.log('❌ кадр ссылается на storeID, которого нет в модели'); }
+		}
+		if (cfg.version !== 1) { failed = true; console.log('❌ version не 1'); }
+		if (!zipWritten['skin.png']) { failed = true; console.log('❌ в архиве нет skin.png'); }
+		if (!exported || exported.extensions[0] !== 'cpmproject') {
+			failed = true;
+			console.log('❌ Blockbench.export не позван с расширением cpmproject');
+		}
+	}
 }
 
 console.log(`${String.fromCharCode(10)}${failed ? '❌ ЕСТЬ ПРОБЛЕМЫ' : '✅ ПЛАГИН ИСПОЛНЯЕТСЯ БЕЗ ОШИБОК'}${String.fromCharCode(10)}`);
